@@ -82,7 +82,11 @@ class Brandlist(graphene.ObjectType):
 
 class Status(graphene.ObjectType):
     partner_id = graphene.String()
-    ref_number = graphene.String()    
+    ref_number = graphene.String()
+    success = graphene.String()
+    response_code = graphene.String()
+    message = graphene.Field(Message, ID=graphene.String(), EN=graphene.String())
+    data = graphene.Field(Data)    
 
 class Query(graphene.ObjectType):
     digital_product_list = graphene.List(Product, category=graphene.String(default_value="*"), 
@@ -296,7 +300,7 @@ class Query(graphene.ObjectType):
         
         respond = json.loads(api_response)
         x = respond["data"]
-        y = Payment(response_code=respond["responseCode"],
+        y = Status(response_code=respond["responseCode"],
                     success=respond["success"],
                     message=(Message(ID=respond["message"].get("ID"), EN=respond["message"].get("EN"))),
                     data=(Data(ref_number=x.get("refNumber"),
