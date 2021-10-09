@@ -1,14 +1,17 @@
-from inspect import CO_ITERABLE_COROUTINE
-import graphene, datetime
+import graphene, datetime, os
+import tinydb
+import requests,json
+import random
+import humps
 from fastapi import FastAPI
 from starlette.graphql import GraphQLApp
 from data import db, setup
-import tinydb
-import requests,json
 from string import Template
-from kafka import KafkaProducer
+from collections import OrderedDict
 
 setup()
+
+AYOPOP_CALLBACK_URL = os.getenv("AYOPOP_CALLBACK_URL", "https://93m5f6zo3c.execute-api.ap-southeast-2.amazonaws.com/dev")
 
 class Product(graphene.ObjectType):
     category = graphene.String(default_value="")
@@ -60,21 +63,24 @@ class Inquiry(graphene.ObjectType):
     message = graphene.Field(Message, ID=graphene.String(), EN=graphene.String())
     data = graphene.Field(Data)
     
-    
-class Payment(graphene.ObjectType):
-    inquiry_id = graphene.String()
-    account_number = graphene.String()
-    product_code = graphene.String()
-    amount = graphene.String()
-    ref_number = graphene.String()
-    partner_id = graphene.String()
-    buyer_email = graphene.String()
-    public_buyer_id = graphene.String()
-    callback_urls = graphene.String()
-    success = graphene.String()
+class Core(graphene.ObjectType):
+    class Meta:
+        default_resolver= graphene.types.resolver.dict_resolver
+    core_response_code = graphene.String()
+    core_response = graphene.String()
+    core_message = graphene.String()
+    core_journal = graphene.String()
+
+class AyopopPayment(graphene.ObjectType):
     response_code = graphene.String()
+    success = graphene.String()
     message = graphene.Field(Message, ID=graphene.String(), EN=graphene.String())
     data = graphene.Field(Data)
+
+class Payment(graphene.ObjectType):
+    channel = graphene.String()
+    core = graphene.Field(Core)
+    host = graphene.Field(AyopopPayment)
 
 class Brandlist(graphene.ObjectType):
     category = graphene.String(default_value="")
@@ -88,6 +94,17 @@ class Status(graphene.ObjectType):
     message = graphene.Field(Message, ID=graphene.String(), EN=graphene.String())
     data = graphene.Field(Data)    
 
+async def reverse_payment(post_data_payment):
+    post_data_payment["journalNum"] = post_data_payment["systemJournal"]
+    post_data_payment.pop("systemJournal")
+    
+    reversal_request = requests.post("http://core-payment:8000/reversal", json=post_data_payment)
+    print(reversal_request.json())
+
+async def save_payment(post_data_payment):
+    save_request = requests.post("http://database-write:8000/db/transaction", json=post_data_payment)
+    print(save_request.json())
+
 class Query(graphene.ObjectType):
     digital_product_list = graphene.List(Product, category=graphene.String(default_value="*"), 
     		startIndex=graphene.Int(default_value=0), endIndex=graphene.Int(default_value=1000) )
@@ -99,11 +116,13 @@ class Query(graphene.ObjectType):
     product_list_brand = graphene.List(Product, brand=graphene.String(default_value="*"),
             startIndex=graphene.Int(default_value=0), endIndex=graphene.Int(default_value=1000))
     payment_ayopop = graphene.Field(Payment, inquiry_id=graphene.String(), account_number=graphene.String(), 
-            product_code=graphene.String(), amount=graphene.String(), ref_number=graphene.String(), 
+            product_code=graphene.String(), amount=graphene.String(),  
             partner_id=graphene.String(), buyer_email=graphene.String(), public_buyer_id=graphene.String(), 
-            callback_urls=graphene.String())
+            core_account_number=graphene.String(), core_naration=graphene.String(), channel=graphene.String())
     brand_list_category = graphene.List(Brandlist, category=graphene.String(default_value="*"))
-    status_ayopop = graphene.Field(Status, partner_id=graphene.String(), ref_number=graphene.String())
+    status_ayopop = graphene.Field(Status, partner_id=graphene.String(), ref_number=graphene.String(),
+            inquiry_id=graphene.String(), core_account_number=graphene.String(), core_naration=graphene.String(), channel=graphene.String())
+
     
     def resolve_total_count(self, info):
     	return len(db)
@@ -184,13 +203,13 @@ class Query(graphene.ObjectType):
             "accountNumber": "${account}", 
             "zoneId": "${zone}",
             "productCode": "${product}" }"""
-        
+
         t = Template(payload)
         p = t.substitute(partner=partner, account=account, zone=zone, product=product)
         
         data_payload = json.loads(p)
         
-        r = requests.post('http://192.168.65.151:18082/v1/bill/check', json=data_payload)
+        r = requests.post('http://ayopop-proxy:8080/v1/bill/check', json=data_payload)
         api_response = r.text
         print(r.text)
         
@@ -221,90 +240,123 @@ class Query(graphene.ObjectType):
                     
         return y
     
-    def resolve_payment_ayopop(self, info, inquiry_id, account_number, product_code, amount, ref_number, 
-            partner_id, buyer_email, public_buyer_id, callback_urls):
-        inq_id = inquiry_id
-        acc_num = account_number
-        prod_code = product_code
-        amnt = amount
-        rf_num = ref_number
-        prtnr_id = partner_id
-        byr_email = buyer_email
-        pblc_byr_id = public_buyer_id
-        cb_url = callback_urls
-         
-        payload = """{"inquiryId": ${inq_id},
-                "accountNumber": "${acc_num}",
-                "productCode": "${prod_code}",
-                "amount": ${amnt},
-                "refNumber": "${rf_num}",
-                "partnerId": "${prtnr_id}",
-                "buyerDetails": {
-                    "buyerEmail": "${byr_email}",
-                    "publicBuyerId": "${pblc_byr_id}"
-                },
-                "CallbackUrls": [
-                    "${cb_url}"
-                ]
-            }"""
+    def resolve_payment_ayopop(self, info, inquiry_id, account_number, product_code, amount,  
+            partner_id, buyer_email, public_buyer_id, core_account_number, core_naration, channel):
+        background = info.context["background"]
+        systemJournal = random.randint(900000, 999999)
+        host_payload = {"inquiryId": int(inquiry_id),
+            "accountNumber": account_number,
+            "productCode": product_code,
+            "amount": int(amount),
+            "refNumber": str(systemJournal),
+            "partnerId": partner_id,
+            "buyerDetails": {
+                "buyerEmail": buyer_email,
+                "publicBuyerId": public_buyer_id
+            },
+            "CallbackUrls": [
+                AYOPOP_CALLBACK_URL
+            ]
+        }
+        
+        core_payload = { 
+          "channel": channel,
+          "billerCode": "0124",
+          "regionCode": "0001",
+          "cardNum": account_number,
+          "billerName": "AYOPOP",
+          "paymentMethod": "2",
+          "accountNum": core_account_number,
+          "trxAmount": amount,
+          "feeAmount": 0,
+          "naration": core_naration,
+          "invoiceNum": inquiry_id,
+          "sign": "1",
+          "refNo": "",
+          "flag": "Y",
+          "amount1": 0,
+          "amount2": 0,
+          "amount3": 0,
+          "amount4": 0,
+          "amount5": 0,
+          "systemJournal": str(systemJournal),
+          "journalNum": ""
+        }
+
+        construct_response = { "channel": channel }
+        
+        core_request = requests.post('http://core-payment:8000/payment', json=core_payload)
+        fault_json = core_request.json()
+        fault_indicator = fault_json["soapenv:Envelope"]["soapenv:Body"]
+        #print (fault_indicator)
+        if fault_indicator == {'soapenv:Fault': {'@xmlns:m': 'http://service.bni.co.id/core', 'faultcode': 'm:AppFault', 'faultstring': '0398', 'detail': {'@encodingStyle': '', 'core:transaction_appFault': {'@xmlns:core': 'http://service.bni.co.id/core', 'errorNum': '0398', 'errorDescription': 'DANA TIDAK CUKUP'}}}} :
+            print(core_request.json())
+            core_response = { "core_response_code": "0266", "core_response": "NG", "core_message": "Dana Tidak Cukup", "core_journal": systemJournal }
+            construct_response.update({'core': core_response})
+            construct_response = humps.decamelize(construct_response)
+            return Payment(**construct_response)
+        host_request = requests.post('http://ayopop-proxy:8080/v1/bill/payment', json=host_payload)
+        
+        
+        core_response = { "core_response_code": "", "core_response": "OK", "core_message": "OK", "core_journal": systemJournal }
+        
+        print(core_request.json())
+        host_response = host_request.json()
+        construct_response.update({'core': core_response})
+        construct_response.update({'host': host_response})
+        
+        # if host_response["success"] == False:
+        #     background.add_task(reverse_payment, post_data_payment=core_payload)
+
+        save_to_db = {
+            "inquiry_id": inquiry_id,
+            "trx_date": "2021-09-08T00:46:47.129Z",
+            "account_num_voucher": account_number,
+            "product_code": product_code,
+            "transaction_id": host_response["data"]["transactionId"],
+            "amount": int(amount),
+            "account_num": core_account_number,
+            "journal_num": systemJournal,
+            "response_code": host_response["responseCode"],
+            "response_message": host_response["message"]["ID"]
+            }
+        
+        dbsave = json.dumps(save_to_db)
+
+        background.add_task(save_payment, post_data_payment=json.loads(dbsave))
+
+        construct_response = humps.decamelize(construct_response)
+        return Payment(**construct_response)
     
-        t = Template(payload)
-        p = t.substitute(inq_id=inq_id, acc_num=acc_num, prod_code=prod_code, amnt=amnt, rf_num=rf_num,
-                    prtnr_id=prtnr_id, byr_email=byr_email, pblc_byr_id=pblc_byr_id, cb_url=cb_url)
-        
-        data_payload = json.loads(p)
-
-        r = requests.post('http://192.168.65.151:18082/v1/bill/payment', json=data_payload)
-        api_response = r.text
-        print(r.text)
-        
-        respond = json.loads(api_response)
-        x = respond["data"]
-        y = Payment(response_code=respond["responseCode"],
-                    success=respond["success"],
-                    message=(Message(ID=respond["message"].get("ID"), EN=respond["message"].get("EN"))),
-                    data=(Data(ref_number=x.get("refNumber"),
-                    transaction_id = x.get("transactionId"),
-                    account_number=x.get("accountNumber"),
-                    product_name=x.get("productName"),
-                    product_code =x.get("productCode"),
-                    category=x.get("category"),
-                    amount=x.get("amount"),
-                    total_admin=x.get("total_admin"),
-                    token = x.get("token"),
-                    processing_fee=x.get("processingFee"),
-                    customer_detail=x.get("customerDetail"),
-                    bill_details=x.get("billDetails"),
-                    product_details=x.get("productDetails"),
-                    extra_fields=x.get("extraFields"))))
-
-        return y
-
-    def resolve_status_ayopop(self, info, partner_id, ref_number):
+    def resolve_status_ayopop(self, info, partner_id, ref_number, inquiry_id, core_account_number, core_naration, channel):
         prtnr_id = partner_id
         rf_num = ref_number
+        response_message = ""
+        transaction_id= ""
 
         payload = """{
                 "partnerId": "${prtnr_id}",
                 "refNumber": "${rf_num}"
             }"""
-        
+
         t = Template(payload)
         p = t.substitute(prtnr_id=prtnr_id, rf_num=rf_num,)
         
         data_payload = json.loads(p)
 
-        r = requests.post('http://192.168.65.151:18082/v1/bill/status', json=data_payload)
+        r = requests.post('http://ayopop-proxy:8080/v1/bill/status', json=data_payload)
         api_response = r.text
         print(r.text)
         
         respond = json.loads(api_response)
         x = respond["data"]
+        response_message = respond["message"].get("ID")
+        transaction_id= x.get("transactionId")
         y = Status(response_code=respond["responseCode"],
                     success=respond["success"],
-                    message=(Message(ID=respond["message"].get("ID"), EN=respond["message"].get("EN"))),
+                    message=(Message(ID=response_message, EN=respond["message"].get("EN"))),
                     data=(Data(ref_number=x.get("refNumber"),
-                    transaction_id = x.get("transactionId"),
+                    transaction_id = transaction_id,
                     account_number=x.get("accountNumber"),
                     product_name=x.get("productName"),
                     product_code =x.get("productCode"),
@@ -317,6 +369,44 @@ class Query(graphene.ObjectType):
                     bill_details=x.get("billDetails"),
                     product_details=x.get("productDetails"),
                     extra_fields=x.get("extraFields"))))
+        
+        core_payload = { 
+          "channel": channel,
+          "billerCode": "0124",
+          "regionCode": "0001",
+          "cardNum": x.get("accountNumber"),
+          "billerName": "AYOPOP",
+          "paymentMethod": "2",
+          "accountNum": core_account_number,
+          "trxAmount": x.get("amount"),
+          "feeAmount": 0,
+          "naration": core_naration,
+          "invoiceNum": inquiry_id,
+          "sign": "1",
+          "refNo": "",
+          "flag": "Y",
+          "amount1": 0,
+          "amount2": 0,
+          "amount3": 0,
+          "amount4": 0,
+          "amount5": 0,
+          "systemJournal": str(ref_number),
+          "journalNum": ""
+        }
+
+        if respond["success"] == False:
+            core_payload["journalNum"] = core_payload["systemJournal"]
+            core_payload.pop("systemJournal")
+    
+            reversal_request = requests.post("http://core-payment:8000/reversal", json=core_payload)
+            print(reversal_request.json())
+
+        update_db = {"response_message": response_message,
+            "transaction_id": transaction_id
+            }
+
+        save_request = requests.post("http://database-write:8000/db/statusupdate", json=update_db)
+        print(save_request.json())
 
         return y
 

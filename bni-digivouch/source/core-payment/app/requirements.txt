@@ -1,0 +1,4 @@
+requests==2.24.0
+xmltodict==0.12.0
+uvicorn==0.12.2
+fastapi==0.64.0

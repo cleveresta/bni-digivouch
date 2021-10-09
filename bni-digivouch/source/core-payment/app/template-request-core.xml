@@ -1,0 +1,39 @@
+<soapenv:Envelope xmlns:q0="http://service.bni.co.id/core" xmlns:bo="http://service.bni.co.id/core/bo" xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+    <soapenv:Body>
+        <q0:transaction>
+            <request>
+                <systemId>MHP</systemId>
+                <customHeader>
+                    <branch>${branch}</branch>
+                    <terminal>${terminal}</terminal>
+                    <teller>${teller}</teller>
+                    <overrideFlag/>
+                    <supervisorId/>
+                    <systemJournal>${systemJournal}</systemJournal>
+                </customHeader>
+                <content xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="bo:BillingPaymentReq">
+                    <billerCode>${billerCode}</billerCode>
+                    <regionCode>${regionCode}</regionCode>
+                    <billerName>AYOPOP</billerName>
+                    <cardNum>${nomorHp}</cardNum>
+                    <cardName>AYOPOP</cardName>
+                    <paymentMethod>2</paymentMethod>
+                    <accountNum>${accountNum}</accountNum>
+                    <trxAmount>${trxAmount}</trxAmount>
+                    <feeAmount>0</feeAmount>
+                    <naration>${naration}</naration>
+                    <invoiceNum>${nomorHp}</invoiceNum>
+                    <journalNum/>
+                    <sign>1</sign>
+                    <refNo/>
+                    <flag>Y</flag>
+                    <amount1>0</amount1>
+                    <amount2>0</amount2>
+                    <amount3>0</amount3>
+                    <amount4>0</amount4>
+                    <amount5>0</amount5>
+                </content>
+            </request>
+        </q0:transaction>
+    </soapenv:Body>
+</soapenv:Envelope>
