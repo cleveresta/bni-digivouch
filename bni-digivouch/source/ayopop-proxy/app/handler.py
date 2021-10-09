@@ -2,7 +2,10 @@ from aiohttp import web
 import requests, os, logging, json, jwt
 
 routes = web.RouteTableDef()
-Ayopop_URL = os.getenv('Ayopop_URL', default="https://dev.openapi.ayopop.id/api/")
+AYOPOP_URL = os.getenv('AYOPOP_URL', default="https://dev.openapi.ayopop.id/api/")
+AYOPOP_KEY = os.getenv('AYOPOP_KEY', default="DKfMyNbLtjsP")
+AYOPOP_SECRET = os.getenv('AYOPOP_SECRET', default="SaUbZVUWSjWPTn1VSyUQq69KU4h2d7NjJc1")
+
 logging.basicConfig(level=logging.DEBUG)
 
 @routes.get('/healthcheck')
@@ -14,7 +17,7 @@ async def handler_healthcheck(request):
 @routes.get('/{tail:.*}')
 async def handler_get(request):
     uri_path = request.match_info['tail']
-    r = requests.get(Ayopop_URL + uri_path)
+    r = requests.get(AYOPOP_URL + uri_path)
     return web.Response(text=r.text, content_type='application/json', status=r.status_code)
 
 @routes.post('/{tail:.*}')
@@ -25,13 +28,19 @@ async def handler_post(request):
     else:
         json_body = None
 
-    encoded_jwt = jwt.encode(json_body, "SaUbZVUWSjWPTn1VSyUQq69KU4h2d7NjJc1", algorithm="HS256")
+    KEY = AYOPOP_KEY
+    SECRET = AYOPOP_SECRET
+
+    encoded_jwt = jwt.encode(json_body, SECRET, algorithm="HS256")
     
-    headers = { 'KEY': 'DKfMyNbLtjsP', 
+    headers = { 'KEY': KEY, 
         'TOKEN': encoded_jwt, 
         'VERSION': '1.0'}
     
-    r = requests.post(Ayopop_URL + uri_path, json=json_body, headers=headers)
+    r = requests.post(AYOPOP_URL + uri_path, json=json_body, headers=headers)
+    logging.info("headers: %s", str(headers))
+    logging.info("json_body: %s", str(json_body))
+    logging.info("response: %s", r.text)
     return web.Response(text=r.text, content_type='application/json', status=r.status_code)
 
 @routes.put('/{tail:.*}')
@@ -41,7 +50,7 @@ async def handler_put(request):
         json_body = await request.json()
     else:
         json_body = None
-    r = requests.put(Ayopop_URL + uri_path, json=json_body)
+    r = requests.put(AYOPOP_URL + uri_path, json=json_body)
     return web.Response(text=r.text, content_type='application/json', status=r.status_code)
 
 @routes.delete('/{tail:.*}')
@@ -51,7 +60,7 @@ async def handler_delete(request):
         json_body = await request.json()
     else:
         json_body = None
-    r = requests.delete(Ayopop_URL + uri_path, json=json_body)
+    r = requests.delete(AYOPOP_URL + uri_path, json=json_body)
     return web.Response(text=r.text, content_type='application/json', status=r.status_code)
         
 app = web.Application()
