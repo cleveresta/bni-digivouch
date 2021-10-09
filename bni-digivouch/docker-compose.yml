@@ -1,0 +1,41 @@
+version: "3.8"
+   
+services:
+  ayopop-proxy:
+    image: ${URL_HARBOR}/ayopop-proxy:0.1
+    build: ./source/ayopop-proxy/
+    ports:
+      - 18082:8080
+    environment:
+      AYOPOP_URL: ${AYOPOP_URL}
+      AYOPOP_KEY: ${AYOPOP_KEY}
+      AYOPOP_SECRET: ${AYOPOP_SECRET}
+      HTTPS_PROXY: ${HTTPS_PROXY}
+  graphql:
+    image: ${URL_HARBOR}/digivouch-graphql:0.1
+    build: ./source/graphql/
+    ports:
+      - 18000:8000
+    environment:
+      AYOPOP_CALLBACK_URL: ${AYOPOP_CALLBACK_URL}
+  core-payment:
+    image: ${URL_HARBOR}/core-payment:0.1
+    build: ./source/core-payment/
+    environment: 
+      CORESERVICE_URL: ${CORESERVICE_URL}    
+  ayopop-callback-getter:
+    image: ${URL_HARBOR}/ayopop-callback-getter:0.1
+    build: ./source/ayopop-callback-getter/
+    environment: 
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
+      SQS_URL: ${SQS_URL}
+      HTTPS_PROXY: ${HTTPS_PROXY}
+  database-write:
+    image: ${URL_HARBOR}/database-write:0.1
+    build: ./source/database-write/
+    environment: 
+      DBUSER: ${DBUSER}
+      DBPASS: ${DBPASS}
+      DBCONN: ${DBCONN}
